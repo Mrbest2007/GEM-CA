@@ -11,7 +11,7 @@ Trò chơi **Cờ Cá Ngựa (Ludo) 3D** chạy hoàn toàn trong **một file H
 - Hỗ trợ **iOS / Android**: bố cục tự co giãn, xúc xắc và nút tung luôn hiện.
 
 ## ✨ Tính năng
-- 2–4 người, bot hoặc chơi online qua **mã phòng** (PeerJS / WebRTC).
+- 2–4 người, bot hoặc chơi online qua **mã phòng** (PeerJS / WebRTC, có kênh dự phòng MQTT-over-WebSocket cho iOS / 4G).
 - Tiếng Việt / English, đổi tên ngay trong game.
 - Mèo chibi 4 màu, **tủ đồ** (màu lông, trang phục, mũ, kính, phụ kiện cổ) kiểu Art Toy.
 - Bàn cờ 3D isometric: xoay bằng kéo/nút, 3 góc nhìn, zoom.
