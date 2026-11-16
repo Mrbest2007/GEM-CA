@@ -1269,6 +1269,7 @@ function enterGame(){
 function exitToMenu(){ // thoát an toàn: huỷ mọi animation/timer đang chạy, đóng mọi hộp thoại
   G.sid++;G.mode='menu';G.started=false;clearTimeout(G.timer);stopVictory();
   try{G.peer&&G.peer.destroy();}catch(e){}
+  try{relayStop();}catch(e){}
   G.peer=null;G.conns={};G.hostConn=null;G.busy=false;G.waiting=false;S=null;G.L=null;G.q=Promise.resolve();
   ['winModal','cardModal','confirm'].forEach(id=>$('#'+id).classList.remove('show'));$('#ward').classList.remove('show');
   show('menu');
@@ -1295,6 +1296,94 @@ async function netDiag(){
     pc.createOffer().then(o=>pc.setLocalDescription(o));setTimeout(()=>{try{pc.close();}catch(e){}done();},7000);});}catch(e){}
   return res;
 }
+/* ============ KÊNH DỰ PHÒNG: relay qua MQTT-over-WebSocket (broker công cộng miễn phí) ============
+   Không cần NAT/TURN/WebRTC -> chạy được trên 4G/5G, Wi-Fi trường học, iOS Safari. Mọi thứ đi qua HTTPS/WSS (cổng 443/8xxx).
+   Chủ phòng nối ĐỒNG THỜI nhiều broker và công bố phòng (retained) ở topic  catludo-v1/<MÃ>/host.
+   Khách nối các broker, broker nào trả về phòng trước thì dùng broker đó. Chủ -> khách:  .../g/<gid>;  khách -> chủ: .../h */
+const BROKERS=['wss://broker.emqx.io:8084/mqtt','wss://broker.hivemq.com:8884/mqtt'];
+const RT='catludo-v1/',uid=()=>Math.random().toString(36).slice(2,10);
+function loadMqttLib(){
+  const urls=['https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js','https://cdn.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js'];
+  const one=u=>new Promise((res,rej)=>{const e=document.createElement('script');e.src=u;e.onload=res;e.onerror=()=>rej();document.head.appendChild(e);});
+  return (async()=>{if(window.mqtt)return;for(const u of urls){try{await one(u);if(window.mqtt)return;}catch(e){}}throw new Error('mqtt');})();
+}
+/* Đối tượng "kết nối" giả lập giao diện của PeerJS DataConnection (on/send/close/open) để dùng lại logic cũ */
+class RelayConn{
+  constructor(send,onClose){this.open=true;this._h={};this._send=send;this._onClose=onClose;this.last=Date.now();}
+  on(ev,fn){this._h[ev]=fn;return this;}
+  _emit(ev,a){const f=this._h[ev];if(f)try{f(a);}catch(e){console.error(e);}}
+  send(m){if(this.open)this._send(m);}
+  close(){if(!this.open)return;try{this._send({t:'bye'});}catch(e){}this._kill();}
+  _kill(){if(!this.open)return;this.open=false;this._emit('close');if(this._onClose)this._onClose();}
+}
+function relayStop(){
+  const R=G.relay;if(!R)return;G.relay=null;clearInterval(R.timer);
+  try{for(const g in R.conns)R.conns[g].close();}catch(e){}
+  R.clients.forEach(c=>{try{if(R.isHost){c.publish(RT+R.code+'/host','',{retain:true},()=>{try{c.end(true);}catch(e){}});setTimeout(()=>{try{c.end(true);}catch(e){}},600);}else c.end(true);}catch(e){}});
+}
+function relayHost(code,onReady,onFail){
+  const R=G.relay={code,isHost:true,clients:[],conns:{},ready:false};let down=0,failed=false;
+  const giveUp=()=>{if(failed||R.ready)return;failed=true;onFail('relay');};
+  const miss=()=>{if(++down>=BROKERS.length)giveUp();};
+  BROKERS.forEach(url=>{
+    let c;try{c=mqtt.connect(url,{clientId:'ch'+uid(),keepalive:20,reconnectPeriod:2500,connectTimeout:8000,will:{topic:RT+code+'/host',payload:'',retain:true,qos:0}});}catch(e){miss();return;}
+    R.clients.push(c);c.bk=url;let first=true,seenDown=false;
+    c.on('connect',()=>{
+      c.subscribe(RT+code+'/h');c.publish(RT+code+'/host',JSON.stringify({t:'room'}),{retain:true});   // (re)công bố phòng
+      if(!R.ready){R.ready=true;onReady();}
+    });
+    c.on('error',()=>{if(first&&!seenDown){seenDown=true;miss();}});
+    c.on('message',(tp,pl)=>{
+      let o;try{o=JSON.parse(pl.toString());}catch(e){return;}
+      if(!o||!o.g||!o.m)return;
+      let cn=R.conns[o.g];
+      if(!cn){
+        if(o.m.t!=='hello')return;
+        const g=o.g;cn=new RelayConn(m=>{const k=R.conns[g];(k&&k.cl||c).publish(RT+code+'/g/'+g,JSON.stringify(m));},()=>{delete R.conns[g];});
+        R.conns[g]=cn;onGuestConn(cn);
+      }
+      cn.cl=c;cn.last=Date.now();                                  // luôn trả lời qua broker mà khách vừa dùng
+      if(o.m.t==='ping')return;
+      if(o.m.t==='bye'){cn._kill();return;}
+      cn._emit('data',o.m);
+    });
+  });
+  // nhịp tim: gửi hb cho khách; khách im > 30s coi như đã rời
+  R.timer=setInterval(()=>{const now=Date.now();for(const g in R.conns){const k=R.conns[g];if(now-k.last>30000)k._kill();else k.send({t:'hb'});}},5000);
+  setTimeout(giveUp,10000);
+}
+/* Khách: trả về Promise<RelayConn>. Từ chối với 'server' (không nối được broker nào) hoặc 'room' (broker OK nhưng không có phòng). */
+function relayJoin(code){
+  return new Promise((resolve,reject)=>{
+    const gid='g'+uid(),R=G.relay={code,isHost:false,clients:[],conns:{}};let chosen=null,settled=false,connected=0,t1=null;
+    const fail=w=>{if(settled)return;settled=true;clearTimeout(t1);relayStop();reject(w);};
+    BROKERS.forEach(url=>{
+      let c;try{c=mqtt.connect(url,{clientId:'cg'+gid+uid().slice(0,3),keepalive:20,reconnectPeriod:2500,connectTimeout:8000});}catch(e){return;}
+      R.clients.push(c);
+      c.on('connect',()=>{
+        connected++;if(!t1)t1=setTimeout(()=>fail('room'),5500);     // đã nối được broker nhưng 5.5s không thấy phòng
+        c.subscribe([RT+code+'/host',RT+code+'/g/'+gid]);
+      });
+      c.on('message',(tp,pl)=>{
+        const txt=pl.toString();
+        if(tp.endsWith('/host')){
+          if(!txt||settled||chosen)return;                            // phòng được công bố -> chọn broker này
+          chosen=c;settled=true;clearTimeout(t1);
+          R.clients.forEach(o=>{if(o!==c){try{o.end(true);}catch(e){}}});R.clients=[c];
+          const cn=new RelayConn(m=>c.publish(RT+code+'/h',JSON.stringify({g:gid,m})),()=>{clearInterval(R.timer);});
+          R.conns[gid]=cn;
+          R.timer=setInterval(()=>{if(Date.now()-cn.last>30000)cn._kill();else cn.send({t:'ping'});},5000);
+          resolve(cn);return;
+        }
+        let m;try{m=JSON.parse(txt);}catch(e){return;}
+        const cn=R.conns[gid];if(!cn||!m)return;cn.last=Date.now();
+        if(m.t==='hb')return;if(m.t==='bye'){cn._kill();return;}
+        cn._emit('data',m);
+      });
+    });
+    setTimeout(()=>{if(!connected)fail('server');},10000);
+  });
+}
 /* iOS tạm ngắt kết nối tín hiệu khi Safari xuống nền -> tự nối lại khi quay lại */
 function keepPeerAlive(peer){
   peer.on('disconnected',()=>{setTimeout(()=>{try{if(G.peer===peer&&!peer.destroyed)peer.reconnect();}catch(e){}},800);});
@@ -1304,18 +1393,21 @@ const genCode=()=>{const a='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let c='';for(let i
 function broadcast(m){for(const k in G.conns){const c=G.conns[k];try{if(c&&c.open)c.send(m);}catch(e){}}}
 function broadcastLobby(){broadcast({t:'lobby',seats:G.L.seats});renderLobby();}
 async function createRoom(){
-  toast(t('connecting'),6000);
-  try{await loadPeerLib();}catch(e){toast(t('err_peer'));return;}
-  initLobby('host');openPeer(0);
-}
-function openPeer(tries){
-  const code=genCode(),peer=new Peer('catludo-'+code,PEER_OPTS);G.peer=peer;keepPeerAlive(peer);
-  peer.on('open',()=>{G.code=code;$('#toast').classList.remove('show');showLobby();});
-  peer.on('connection',onGuestConn);
-  peer.on('error',err=>{
-    if(err.type==='unavailable-id'&&tries<5){try{peer.destroy();}catch(e){}openPeer(tries+1);}
-    else{toast(t('err_peer')+' ('+err.type+')',3500);exitToMenu();}
-  });
+  toast(t('connecting'),14000);
+  const[pl,ml]=await Promise.allSettled([loadPeerLib(),loadMqttLib()]);       // tải cả 2 thư viện: PeerJS (WebRTC) + MQTT relay
+  const hasP=pl.status==='fulfilled',hasM=ml.status==='fulfilled';
+  if(!hasP&&!hasM){toast(t('err_peer'));return;}
+  initLobby('host');
+  const code=genCode();let ready=false,pending=0;
+  const ok=()=>{if(ready)return;ready=true;G.code=code;$('#toast').classList.remove('show');showLobby();};
+  const bad=why=>{pending--;if(!ready&&pending<=0){toast(t('err_peer')+' ('+why+')',4500);exitToMenu();}};
+  if(hasM){pending++;relayHost(code,ok,bad);}
+  if(hasP){pending++;
+    try{const peer=new Peer('catludo-'+code,PEER_OPTS);G.peer=peer;keepPeerAlive(peer);
+      peer.on('open',ok);peer.on('connection',onGuestConn);
+      peer.on('error',err=>{if(!ready)bad(err.type);});
+    }catch(e){bad('peer');}
+  }
 }
 function onGuestConn(conn){
   conn.on('data',m=>{
@@ -1345,6 +1437,17 @@ async function joinRoom(){
   try{await loadPeerLib();}catch(e){toast(t('err_peer'));return;}
   G.mode='guest';G.code=code;G.L=null;G.started=false;
   const sid=++G.joinTry;
+  // ① Thử kênh relay MQTT trước (nhanh, không phụ thuộc NAT)
+  try{await loadMqttLib();
+    toast((lang==='vi'?'Đang tìm phòng ':'Looking for room ')+code+'…',20000);
+    const conn=await relayJoin(code);
+    if(sid!==G.joinTry||G.mode!=='guest'){conn.close();return;}
+    G.hostConn=conn;
+    conn.on('data',onHostMsg);
+    conn.on('close',()=>{if(G.mode==='guest'){toast(t('err_left'),3000);exitToMenu();}});
+    conn.send({t:'hello',p:myProfile()});$('#toast').classList.remove('show');showLobby();return;
+  }catch(e){ if(sid!==G.joinTry||G.mode!=='guest')return; G.relayWhy=e; }
+  // ② Không được -> thử WebRTC (PeerJS), tối đa 2 lần
   const attempt=n=>{
     if(sid!==G.joinTry||G.mode!=='guest')return;
     try{if(G.peer)G.peer.destroy();}catch(e){}
@@ -1371,7 +1474,7 @@ async function joinRoom(){
     });
     peer.on('error',err=>{if(err.type==='peer-unavailable'){stage='room';}retry(err.type);});
   };
-  attempt(1);
+  attempt(2);
 }
 function onHostMsg(m){
   if(!m||!m.t)return;
