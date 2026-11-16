@@ -31,3 +31,6 @@ index.html                    # toàn bộ game (HTML + CSS + JS)
 docs/                         # ảnh minh hoạ
 .github/workflows/pages.yml   # tự động deploy GitHub Pages
 ```
+
+## 📄 Giấy phép
+Phát hành theo giấy phép [MIT](LICENSE).
