@@ -497,7 +497,7 @@ function actMove(S,id,rnd){
   else if(info.bounce){                                   // đáp vào quân có giáp: tiến sát rồi quay lại chỗ cũ
     const f=pc.p,stop=info.to-1;
     if(stop>f)ev.push({t:'walk',id,from:f,to:stop});
-    ev.push({t:'blocked',id:info.bounce.id,by:id});
+    info.bounce.sh=false;ev.push({t:'blocked',id:info.bounce.id,by:id});   // giáp chỉ chặn 1 lần rồi vỡ
     if(stop>f)ev.push({t:'walk',id,from:stop,to:f,fast:1});
   }
   else{const f=pc.p;pc.sh=false;pc.p=info.to;ev.push({t:'walk',id,from:f,to:pc.p});land(S,pc,ev,rnd,true);}
@@ -517,7 +517,7 @@ function land(S,pc,ev,rnd,full){
   const idx=ringIdx(o,pc.p),type=ringType(idx);
   for(const v of S.pieces){                               // đá quân đối thủ (không có giáp)
     if(v.o===o||v.p<0||v.p>=RL||ringIdx(v.o,v.p)!==idx||v===pc)continue;
-    if(v.sh){ev.push({t:'blocked',id:v.id,by:pc.id});continue;}
+    if(v.sh){v.sh=false;ev.push({t:'blocked',id:v.id,by:pc.id});continue;}   // giáp vỡ sau 1 lần chặn
     v.p=-1;v.fz=0;v.sh=false;seat.score+=30;ev.push({t:'capture',id:v.id,by:pc.id});
   }
   if(type==='shield'){pc.sh=true;ev.push({t:'shield',id:pc.id,start:0});}   // ô xuất phát KHÔNG còn bất tử
@@ -585,9 +585,9 @@ vi:{title:'Cờ Cá Ngựa Mèo Chibi',sub:'Biến tấu siêu dễ thương –
  good:'PHẦN THƯỞNG',bad:'BẪY!',c_fwd5:'Tiến 5 ô',c_revive:'Hồi sinh',c_coins:'Thưởng điểm',c_skip:'Mất lượt',c_reset:'Về vạch xuất phát',c_freeze:'Đóng băng',
  d_fwd5:'Mèo phóng thẳng 5 ô!',d_revive:'Một chú mèo trong chuồng được hồi sinh ra sân!',d_coins:'Nhận ngay 50 điểm thưởng!',d_skip:'Bạn mất lượt kế tiếp.',d_reset:'Mèo bị đẩy về ô xuất phát.',d_freeze:'Mèo bị đóng băng 1 lượt.',
  tap_card:'👆 Chạm vào lá bài để mở!',
- lg_start:'Ô xuất phát (không quà/bẫy, KHÔNG được bảo vệ)',lg_corner:'Ô giao ngã rẽ (ô thường)',lg_shield:'Giáp: không bị đá',lg_speed:'Tung xúc xắc thêm lần nữa',lg_back:'Xoáy bẫy: lùi 2–3 ô',lg_mystery:'Thẻ bài bí ẩn',
+ lg_start:'Ô xuất phát (không quà/bẫy, KHÔNG được bảo vệ)',lg_corner:'Ô giao ngã rẽ (ô thường)',lg_shield:'Giáp: chặn 1 lần bị đá rồi vỡ',lg_speed:'Tung xúc xắc thêm lần nữa',lg_back:'Xoáy bẫy: lùi 2–3 ô',lg_mystery:'Thẻ bài bí ẩn',
  rules_t:'📖 Luật chơi',
- rules:['Tung được <b>1 hoặc 6</b> để ra quân khỏi chuồng. Xúc xắc hiện bao nhiêu thì đi đúng bấy nhiêu ô.','Tung ra <b>1 hoặc 6</b> được đi tiếp (ba lần 6 liên tiếp thì mất lượt).','Mỗi ô chỉ chứa <b>1 quân</b>. Không được đi xuyên qua quân khác (địch hay bạn). Đáp vào quân địch thì <b>đá</b> về chuồng; nếu quân đó có 🛡️ giáp thì bị <b>bật lại chỗ cũ</b>.','Ô giáp: miễn nhiễm cho tới khi di chuyển tiếp. Ô tia chớp: tung thêm lần nữa. Xoáy tím: lùi 2–3 ô. Thẻ bài: rút thưởng hoặc bẫy. Ô xuất phát (🚩) KHÔNG bất tử: quân đứng đó vẫn bị đá.','Đi hết một vòng rồi vào chuồng đích (ô 1–6). Cần <b>tung đúng số bước</b> để vào ô 6. Đưa cả 4 mèo về ô 6 là thắng!'],
+ rules:['Tung được <b>1 hoặc 6</b> để ra quân khỏi chuồng. Xúc xắc hiện bao nhiêu thì đi đúng bấy nhiêu ô.','Tung ra <b>1 hoặc 6</b> được đi tiếp (ba lần 6 liên tiếp thì mất lượt).','Mỗi ô chỉ chứa <b>1 quân</b>. Không được đi xuyên qua quân khác (địch hay bạn). Đáp vào quân địch thì <b>đá</b> về chuồng; nếu quân đó có 🛡️ giáp thì bị <b>bật lại chỗ cũ</b>.','Ô giáp: chặn được ĐÚNG 1 lần bị đá rồi vỡ (hoặc mất khi quân di chuyển tiếp). Ô tia chớp: tung thêm lần nữa. Xoáy tím: lùi 2–3 ô. Thẻ bài: rút thưởng hoặc bẫy. Ô xuất phát (🚩) KHÔNG bất tử: quân đứng đó vẫn bị đá.','Đi hết một vòng rồi vào chuồng đích (ô 1–6). Cần <b>tung đúng số bước</b> để vào ô 6. Đưa cả 4 mèo về ô 6 là thắng!'],
  win_t:'🎉 Chiến thắng! 🎉',win_text:'{n} đã đưa cả 4 chú mèo về đích!',again:'Chơi lại',to_menu:'Về menu',score:'điểm',
  v_iso:'Isometric',v_tilt:'Nghiêng',v_flat:'Từ trên',v_free:'Tự do',cam_hint:'🖱 Kéo để xoay · cuộn để zoom',
  home_q:'Về màn hình chính?',home_d:'Ván đang chơi sẽ kết thúc.',stay:'Ở lại',leave:'Về menu',
@@ -609,9 +609,9 @@ en:{title:'Chibi Cat Ludo',sub:'A super cute twist – play with friends!',local
  good:'REWARD',bad:'TRAP!',c_fwd5:'Forward 5',c_revive:'Revive',c_coins:'Bonus points',c_skip:'Lose a turn',c_reset:'Back to start',c_freeze:'Freeze',
  d_fwd5:'Your cat dashes 5 steps ahead!',d_revive:'A cat from the cage joins the board!',d_coins:'Get 50 bonus points!',d_skip:'You skip your next turn.',d_reset:'Your cat is sent to the start cell.',d_freeze:'Your cat is frozen for 1 turn.',
  tap_card:'👆 Tap the card to open it!',
- lg_start:'Start cell (no gifts/traps, NOT protected)',lg_corner:'Junction cell (normal)',lg_shield:'Shield: cannot be kicked',lg_speed:'Roll the dice again',lg_back:'Vortex trap: back 2–3',lg_mystery:'Mystery card',
+ lg_start:'Start cell (no gifts/traps, NOT protected)',lg_corner:'Junction cell (normal)',lg_shield:'Shield: blocks one kick, then breaks',lg_speed:'Roll the dice again',lg_back:'Vortex trap: back 2–3',lg_mystery:'Mystery card',
  rules_t:'📖 How to play',
- rules:['Roll a <b>1 or 6</b> to bring a cat out of its cage. Move exactly the number shown on the dice.','Rolling a <b>1 or 6</b> gives another turn (three 6s in a row lose the turn).','Each cell holds <b>one piece</b>. You cannot jump over other pieces (friend or foe). Land on an opponent to <b>kick</b> it home; if it wears a 🛡️ shield you are <b>bounced back</b> to where you started.','Shield: immune until you move again. Bolt: roll again. Purple vortex: back 2–3. Card: reward or trap. Start cell (🚩) is NOT safe: a cat standing there can be kicked.','Complete a lap and enter the home lane (cells 1–6). You need the <b>exact roll</b> to reach cell 6. Get all 4 cats to cell 6 to win!'],
+ rules:['Roll a <b>1 or 6</b> to bring a cat out of its cage. Move exactly the number shown on the dice.','Rolling a <b>1 or 6</b> gives another turn (three 6s in a row lose the turn).','Each cell holds <b>one piece</b>. You cannot jump over other pieces (friend or foe). Land on an opponent to <b>kick</b> it home; if it wears a 🛡️ shield you are <b>bounced back</b> to where you started.','Shield: blocks a kick ONCE, then breaks (it is also lost when the piece moves on). Bolt: roll again. Purple vortex: back 2–3. Card: reward or trap. Start cell (🚩) is NOT safe: a cat standing there can be kicked.','Complete a lap and enter the home lane (cells 1–6). You need the <b>exact roll</b> to reach cell 6. Get all 4 cats to cell 6 to win!'],
  win_t:'🎉 Victory! 🎉',win_text:'{n} brought all 4 cats home!',again:'Play again',to_menu:'Main menu',score:'pts',
  v_iso:'Isometric',v_tilt:'Tilted',v_flat:'Top-down',v_free:'Free',cam_hint:'🖱 Drag to rotate · scroll to zoom',
  home_q:'Back to the main screen?',home_d:'The current game will end.',stay:'Stay',leave:'Leave',
@@ -1046,7 +1046,7 @@ const H={
     v.p=-1;v.sh=false;v.fz=0;updFlags(e.id);el.classList.remove('poof');el.classList.add('flyhome');layout();await sleep(800);
     el.classList.remove('flyhome');setExpr(e.id,'s',900);hopEl(e.id);floatPiece(e.id,t('ev_captured'),'f-bad');snd('hop');await sleep(300);
   },
-  async blocked(e){floatPiece(e.id,'🛡️ '+t('ev_block'),'f-gold');snd('shield');shakeStage();sparkPiece(e.id,'#59d0ff',22);setExpr(e.by,'s',900);setExpr(e.id,'h',900);await sleep(600);},
+  async blocked(e){G.vp[e.id].sh=false;updFlags(e.id);floatPiece(e.id,'🛡️ '+t('ev_block'),'f-gold');snd('shield');shakeStage();sparkPiece(e.id,'#59d0ff',22);setExpr(e.by,'s',900);setExpr(e.id,'h',900);await sleep(600);},
   async shield(e){G.vp[e.id].sh=true;updFlags(e.id);if(e.start){await sleep(120);return;}flashPiece(e.id);floatPiece(e.id,'🛡️ '+t('ev_shield'),'f-gold');snd('shield');sparkPiece(e.id,'#59d0ff');setExpr(e.id,'h',800);await sleep(450);},
   async speed(e){flashPiece(e.id);floatPiece(e.id,'⚡ '+t('ev_speed'),'f-gold');snd('speed');sparkPiece(e.id,'#ffe14d',30);hopEl(e.id);setExpr(e.id,'h',900);await sleep(700);},
   async back(e){flashPiece(e.id);floatPiece(e.id,'🌀 '+t('ev_back',{n:e.n}),'f-bad');snd('back');sparkPiece(e.id,'#b04bff',26);setExpr(e.id,'s',1400);await sleep(600);await walkTo(e.id,e.from,e.to,1);},
