@@ -326,6 +326,7 @@ details.rules li{margin:5px 0 5px 18px}
 }
 button,.btn,#diceScene{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 input,select,textarea{font-size:max(16px,1em)}  /* iOS không tự phóng to khi bấm vào ô nhập */
+#toast{white-space:pre-line;max-width:92vw;text-align:center}
 #joinCode{font-size:16px;text-transform:uppercase}
 </style>
 </head>
@@ -1285,6 +1286,15 @@ function loadPeerLib(){
 const PEER_OPTS={debug:0,config:{iceCandidatePoolSize:4,iceServers:[
   {urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302','stun:stun.cloudflare.com:3478']},
   {urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp','turns:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}]}};
+/* Chẩn đoán mạng: kiểm tra máy chủ tín hiệu PeerJS + STUN (srflx) + TURN (relay) rồi báo kết quả */
+async function netDiag(){
+  const res={srv:false,stun:false,turn:false};
+  try{const c=new AbortController();setTimeout(()=>c.abort(),6000);const r=await fetch('https://0.peerjs.com/peerjs/id?ts='+Date.now(),{signal:c.signal,cache:'no-store'});res.srv=r.ok;}catch(e){}
+  try{await new Promise(done=>{const pc=new RTCPeerConnection(PEER_OPTS.config);pc.createDataChannel('x');
+    pc.onicecandidate=e=>{if(!e.candidate)return done();const m=e.candidate.candidate;if(/ typ srflx/.test(m))res.stun=true;if(/ typ relay/.test(m))res.turn=true;};
+    pc.createOffer().then(o=>pc.setLocalDescription(o));setTimeout(()=>{try{pc.close();}catch(e){}done();},7000);});}catch(e){}
+  return res;
+}
 /* iOS tạm ngắt kết nối tín hiệu khi Safari xuống nền -> tự nối lại khi quay lại */
 function keepPeerAlive(peer){
   peer.on('disconnected',()=>{setTimeout(()=>{try{if(G.peer===peer&&!peer.destroyed)peer.reconnect();}catch(e){}},800);});
@@ -1347,7 +1357,8 @@ async function joinRoom(){
       else{const hint=stage==='server'?(vi?'Không nối được máy chủ trung gian (mạng/chặn). Thử đổi Wi-Fi/4G, tắt VPN/chặn quảng cáo.':'Cannot reach the signaling server. Try another network, disable VPN/ad-block.')
         :stage==='room'?(vi?'Không tìm thấy phòng '+code+'. Kiểm tra mã và chắc chắn chủ phòng đang mở màn hình phòng.':'Room '+code+' not found. Check the code and that the host keeps the lobby open.')
         :(vi?'Tìm thấy phòng nhưng không bắt tay P2P được (mạng chặn WebRTC). Thử cùng Wi-Fi hoặc đổi mạng.':'Room found but P2P handshake failed (network blocks WebRTC). Try the same Wi-Fi or another network.');
-        toast(hint+' ('+why+')',9000);exitToMenu();}};
+        exitToMenu();toast((vi?'Đang kiểm tra mạng…':'Checking network…'),9000);
+        netDiag().then(d=>{const ok=b=>b?'✅':'❌';toast(hint+' ('+why+')\n'+(vi?'Máy chủ ':'Server ')+ok(d.srv)+'  STUN '+ok(d.stun)+'  TURN '+ok(d.turn),14000);});}};
     peer.on('open',()=>{
       stage='p2p';say(vi?'② Đã nối máy chủ, đang bắt tay với chủ phòng…':'② Server OK, handshaking with host…');
       const conn=peer.connect('catludo-'+code,{serialization:'json',reliable:true});G.hostConn=conn;
