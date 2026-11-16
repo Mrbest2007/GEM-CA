@@ -325,6 +325,8 @@ details.rules li{margin:5px 0 5px 18px}
   #rollBtn{grid-column:1;grid-row:2}#status{grid-column:1;grid-row:3;text-align:center}
 }
 button,.btn,#diceScene{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+input,select,textarea{font-size:max(16px,1em)}  /* iOS không tự phóng to khi bấm vào ô nhập */
+#joinCode{font-size:16px;text-transform:uppercase}
 </style>
 </head>
 <body>
@@ -351,7 +353,7 @@ button,.btn,#diceScene{touch-action:manipulation;-webkit-tap-highlight-color:tra
   <div class="col">
     <button class="btn" id="bLocal" data-i="local"></button>
     <button class="btn alt" id="bCreate" data-i="create"></button>
-    <div class="joinrow"><input id="joinCode" maxlength="6" data-ph="code_ph" autocomplete="off"><button class="btn gold" id="bJoin" data-i="join_btn"></button></div>
+    <div class="joinrow"><input id="joinCode" maxlength="6" data-ph="code_ph" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" inputmode="text" enterkeyhint="go"><button class="btn gold" id="bJoin" data-i="join_btn"></button></div>
     <button class="btn green" id="bWard" data-i="wardrobe"></button>
   </div>
   <details class="rules glass"><summary data-i="rules_t"></summary><div id="rulesBody"></div></details>
@@ -784,7 +786,7 @@ const CELL=40;
 const VIEWS={iso:{rx:55,rz:45},tilt:{rx:48,rz:0},flat:{rx:0,rz:0}};
 const CAM={rx:55,rz:45,zoom:1};
 let S=null;
-const G={mode:'menu',L:null,mySeat:0,busy:false,peer:null,conns:{},hostConn:null,code:'',started:false,vp:[],vturn:0,pEl:{},tiles:[],viewMode:store.get('cl_view','iso'),q:Promise.resolve(),timer:null,waiting:false,winShown:false,sid:0,dragMoved:false};
+const G={joinTry:0,mode:'menu',L:null,mySeat:0,busy:false,peer:null,conns:{},hostConn:null,code:'',started:false,vp:[],vturn:0,pEl:{},tiles:[],viewMode:store.get('cl_view','iso'),q:Promise.resolve(),timer:null,waiting:false,winShown:false,sid:0,dragMoved:false};
 const isMine=s=>G.mode==='local'?S.seats[s].type==='human':s===G.mySeat;
 
 function buildBoard(){
@@ -1273,7 +1275,21 @@ function exitToMenu(){ // thoát an toàn: huỷ mọi animation/timer đang ch�
 function askHome(){if(S&&G.mode!=='menu'&&S.phase!=='over')$('#confirm').classList.add('show');else exitToMenu();}
 
 /* --- Online: WebRTC peer-to-peer qua PeerJS (mã phòng = ID chủ phòng) --- */
-function loadPeerLib(){return new Promise((res,rej)=>{if(window.Peer)return res();const s=document.createElement('script');s.src='https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js';s.onload=res;s.onerror=()=>rej();document.head.appendChild(s);});}
+/* Tải PeerJS: thử nhiều CDN (iOS/mạng nhà trường đôi khi chặn một CDN) */
+function loadPeerLib(){
+  const urls=['https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js','https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js'];
+  const one=u=>new Promise((res,rej)=>{const s=document.createElement('script');s.src=u;s.onload=res;s.onerror=()=>rej();document.head.appendChild(s);});
+  return (async()=>{if(window.Peer)return;for(const u of urls){try{await one(u);if(window.Peer)return;}catch(e){}}throw new Error('peerjs');})();
+}
+/* Cấu hình ICE: nhiều STUN + TURN công cộng để kết nối được qua 4G/5G (CGNAT) và Wi-Fi khác mạng — iPhone hay cần TURN */
+const PEER_OPTS={debug:0,config:{iceCandidatePoolSize:4,iceServers:[
+  {urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302','stun:stun.cloudflare.com:3478']},
+  {urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp','turns:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}]}};
+/* iOS tạm ngắt kết nối tín hiệu khi Safari xuống nền -> tự nối lại khi quay lại */
+function keepPeerAlive(peer){
+  peer.on('disconnected',()=>{setTimeout(()=>{try{if(G.peer===peer&&!peer.destroyed)peer.reconnect();}catch(e){}},800);});
+}
+document.addEventListener('visibilitychange',()=>{const p=G.peer;if(!document.hidden&&p&&p.disconnected&&!p.destroyed){try{p.reconnect();}catch(e){}}});
 const genCode=()=>{const a='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let c='';for(let i=0;i<5;i++)c+=a[Math.floor(Math.random()*a.length)];return c;};
 function broadcast(m){for(const k in G.conns){const c=G.conns[k];try{if(c&&c.open)c.send(m);}catch(e){}}}
 function broadcastLobby(){broadcast({t:'lobby',seats:G.L.seats});renderLobby();}
@@ -1283,7 +1299,7 @@ async function createRoom(){
   initLobby('host');openPeer(0);
 }
 function openPeer(tries){
-  const code=genCode(),peer=new Peer('catludo-'+code);G.peer=peer;
+  const code=genCode(),peer=new Peer('catludo-'+code,PEER_OPTS);G.peer=peer;keepPeerAlive(peer);
   peer.on('open',()=>{G.code=code;$('#toast').classList.remove('show');showLobby();});
   peer.on('connection',onGuestConn);
   peer.on('error',err=>{
@@ -1313,19 +1329,29 @@ function onGuestConn(conn){
   });
 }
 async function joinRoom(){
-  const code=$('#joinCode').value.trim().toUpperCase();if(code.length<4)return;
-  toast(t('connecting'),9000);
+  const code=$('#joinCode').value.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');if(code.length<4)return;
+  $('#joinCode').blur();
+  toast(t('connecting'),25000);
   try{await loadPeerLib();}catch(e){toast(t('err_peer'));return;}
   G.mode='guest';G.code=code;G.L=null;G.started=false;
-  const peer=new Peer();G.peer=peer;
-  peer.on('open',()=>{
-    const conn=peer.connect('catludo-'+code,{serialization:'json',reliable:true});G.hostConn=conn;let opened=false;
-    conn.on('open',()=>{opened=true;conn.send({t:'hello',p:myProfile()});$('#toast').classList.remove('show');showLobby();});
-    conn.on('data',onHostMsg);
-    conn.on('close',()=>{if(G.mode==='guest'){toast(t('err_left'),3000);exitToMenu();}});
-    setTimeout(()=>{if(!opened&&G.mode==='guest'){toast(t('err_room'),3000);exitToMenu();}},10000);
-  });
-  peer.on('error',err=>{toast(err.type==='peer-unavailable'?t('err_room'):t('err_peer'),3000);exitToMenu();});
+  const sid=++G.joinTry;
+  const attempt=n=>{
+    if(sid!==G.joinTry||G.mode!=='guest')return;
+    try{if(G.peer)G.peer.destroy();}catch(e){}
+    const peer=new Peer(PEER_OPTS);G.peer=peer;keepPeerAlive(peer);let opened=false,done=false;
+    const retry=why=>{if(done||opened)return;done=true;if(n<3){toast(t('connecting')+' ('+(n+1)+'/3)',25000);setTimeout(()=>attempt(n+1),600);}
+      else{toast(t(why==='peer-unavailable'?'err_room':'err_peer')+(why&&why!=='timeout'?' ('+why+')':''),4000);exitToMenu();}};
+    peer.on('open',()=>{
+      const conn=peer.connect('catludo-'+code,{serialization:'json',reliable:true});G.hostConn=conn;
+      conn.on('open',()=>{if(done)return;opened=true;conn.send({t:'hello',p:myProfile()});$('#toast').classList.remove('show');showLobby();});
+      conn.on('data',onHostMsg);
+      conn.on('error',()=>retry('conn'));
+      conn.on('close',()=>{if(opened&&G.mode==='guest'){toast(t('err_left'),3000);exitToMenu();}else retry('closed');});
+      setTimeout(()=>retry('timeout'),15000);
+    });
+    peer.on('error',err=>{if(err.type==='peer-unavailable'){if(n<2)retry('peer-unavailable');else{done=true;toast(t('err_room'),3500);exitToMenu();}}else retry(err.type);});
+  };
+  attempt(1);
 }
 function onHostMsg(m){
   if(!m||!m.t)return;
